@@ -1,0 +1,512 @@
+---
+title: "Diamond Price Analysis - Harvard Data Science Capstone Project"
+author: "Dania Zhu"
+date: "June 30 2021"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    highlight: pygments
+    keep_tex: true
+  html_document: default
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+``` {r load library, message=FALSE, warning=FALSE}
+library(tidyverse)  # basic
+library(tidyr)      # basic
+library(caret)      # models
+library(corrplot)  # correlation
+library(data.table) 
+library(dplyr)      
+library(kableExtra)
+library(ggplot2) # Plot
+library(gridExtra)  # Plot
+library(forcats)
+library(matrixStats)  # Matrix
+library(rpart)        
+library(stringr)
+library(ggcorrplot)  
+options(digits = 3, warn = -1)
+```
+```{r set working dir, echo=FALSE}
+setwd("C:\\Users\\user\\Desktop\\Harvard_R\\CapStone\\Diamonds")
+```
+
+# 1. Introduction
+# This dataset contains price and other attributes of almost 54,000 diamonds downloaded from Kaggle. There are 10 attributes included in the dataset, here is Feature description:
+
+# price: in US dollars ($326--$18,823), it is the target column 
+
+# The 4 Cs of Diamonds:
+
+# Carat (0.2--5.01) is the diamond’s physical weight measured in metric carats.  One carat equals 1/5 gram and is subdivided into 100 points. Carat weight is the most objective grade of the 4Cs. 
+
+# Cut (Fair, Good, Very Good, Premium, Ideal) In determining the quality of the cut, the diamond grader evaluates the cutter’s skill in the fashioning of the diamond. The more precise the diamond is cut, the more captivating the diamond is to the eye.  
+
+# Color, from J (worst) to D (best) The colour of gem-quality diamonds occurs in the range from colourless to light yellow or light brown. Colourless diamonds are the rarest. Other natural colours (blue, red, pink) are known as "fancy,” and their colour grading is different than from white colorless diamonds.  
+
+# Clarity (I1 (worst), SI2, SI1, VS2, VS1, VVS2, VVS1, IF (best)) Diamonds can have internal characteristics known as inclusions or external characteristics known as blemishes. Diamonds without inclusions or blemishes are rare; however, most characteristics can only be seen with magnification.
+
+# Dimensions
+# x length in mm (0--10.74)
+# y width in mm (0--58.9)
+# z depth in mm (0--31.8)
+
+# Depth: this is Diamond's height (in mm) measured from the culet (bottom tip) to the table (flat, top surface).
+
+# table width: it is the top of the diamond relative to widest point (43--95)
+# A diamond's table refers to the flat facet of the diamond seen when the stone is face up. The main purpose of a diamond table is to refract entering light rays and allow reflected light rays from within the diamond to meet the observer’s eye. The ideal table cut diamond will give the diamond stunning fire and brilliance.
+
+
+```{r Read data}
+dat <- read.csv("diamonds.csv", header=TRUE, sep=",")
+
+str(dat)
+dim(dat)
+```
+
+# 2. Data description
+# We first look at the distinct cut, color, clarity for types and numbers. There are 5 colors types, 7 cut types, and 8 clarities. 
+Diamonds sold at price from lowest $326 to highest $18823, with 1st - 3r Quantile range 950 to 5324, price below $950 are Low. 
+
+```{r Data description}
+dat %>% select (cut, color, clarity) %>% summarize (number_distinct_cuts=n_distinct(dat$cut),
+number_distinct_color= n_distinct(dat$color), 
+number_distinct_clarity = n_distinct(dat$clarity))
+
+# Price summary, 326 - 18823
+summary(dat$price)
+# Carat summary, 0.2 - 5.01
+summary(dat$carat)
+
+# One Diamond sold at $18823, 12 sold at lowest price. Diamond 
+weight is from smallest 0.21 carat to largest 5.1 carat. 
+
+# Diamond sold at highest price
+dat %>% filter(price==18823) %>% nrow()
+# Diamond sold at lowest price
+dat %>% filter(carat==0.2) %>% nrow() 
+```
+
+# Next we like to see for the diamond sold at highest price, how the 4C is (carat, cut, color, clarity), The data showed it is not very big, just the average 2.29; its cut is Premium, top-level cutting, suggests the buyer like the luminous quality, and this could be sold at Sale-event or other unknown factors drove price high.
+
+```{r description - continue}
+# check Max sold at Price high, but Avg carat, avg color, good in cutting & clarity
+dat %>% filter(price==18823) %>% select (carat, price, cut, clarity, color )
+```
+
+# Next we like to see counts in each category of Diamond's cut, color, clarity and distribution.  We find the majority is the Upper 3 classes of cutting: Ideal, Premium, Very Good, together they are around 85%.
+
+```{r cut data}
+t1<-dat %>% group_by(cut)%>% 
+  summarise(count_cut=n(),percent=n()/length(dat$cut) * 100) %>%
+  arrange(desc(percent))
+print.data.frame(t1)
+```
+
+# 4 colors G, E, F, H consist about 70% of total percentage, Best color D is 12%, color distribution is more variant than cut.  
+
+```{r color data}
+t2<-dat %>% group_by(color)%>% summarise(count_color=n(), percent=n()/length(dat$color) *100) %>% arrange(desc(percent))
+print.data.frame(t2)
+```
+
+# For clarity, around 45% of the Diamonds are in middle class of clarity(SI1, VS2), the worst clarity (I1) is 1.3%, the Best clarity (IF) is 3.3%, both worst and best are low in their percentage. VVS1, VVS2(2nd Best) they together are about 15%
+
+```{r clarity data, echo=TRUE}
+t3<-dat %>% group_by(cut)%>% summarise(count_cut=n(), percent=n()/length(dat$cut) * 100) %>% arrange(desc(percent))
+print.data.frame(t3)
+```
+
+
+# 3.  Data Cleaning
+# Before we start data analysis and prediction, we need to get rid of Invalid data (e.g: NULLS, zeros, etc). There are rows in Zero Value in dimension x,y,z, probabaly due to data entry or measure error, we need to remove them.  2nd we need to remove outliers in dataset.
+
+``` {r data cleansing, echo=TRUE, message=FALSE, warning=FALSE}
+# remove zero rows in x, y, z
+dat %>% filter(x==0 | y==0 | z==0) %>% nrow()
+dat <- dat %>% filter(dat$x !=0 & dat$y!=0 & dat$z!=0)
+dim(dat)
+
+# remove outliers 
+dat <- dat %>% filter(x>=3.73 & x<=10.74) %>%
+  filter(y>=3.7 & y<=58.9) %>%
+  filter(z>=1.1 & z<=31.8) %>%
+  filter(depth>=43.0 & depth<=79.0) %>%
+  filter(table>=43.0 & table<=95.0) 
+dim(dat)
+```
+
+# 3rd, we need to convert 3 categorical data to numeric for regression analysis, here is number setup:
+# cut(worst to best): Fair 1, Good 2, Ideal 3, Premium 4, Very Good 5
+# color(J worst to D best): J 1, I  2, H 3, G 4, F 5, E 6,  D 7
+# clarity(I1 worst, SI2, SI1, VS2, VS1, VVS2, VVS1, IF best):
+
+```{r Data cleasing 3, echo=TRUE, message=FALSE, warning=FALSE}
+tmp <- dat %>% 
+  mutate(
+    cut_num = case_when (
+      cut=="Fair" ~ 1,
+      cut=="Good" ~ 2,
+      cut=="Ideal" ~3,
+      cut=="Premium" ~ 4,
+      cut=="Very Good" ~ 5
+    ), color_num = case_when (
+      color=="J" ~ 1,
+      color=="I" ~ 2,
+      color=="H" ~3,
+      color=="G" ~ 4,
+      color=="F" ~ 5,
+      color=="E" ~ 6,
+      color=="D" ~ 7
+    ), clarity_num = case_when (
+      clarity=="I1" ~ 1,
+      clarity=="SI2" ~ 2,
+      clarity=="SI1" ~3,
+      clarity=="VS2" ~ 4,
+      clarity=="VS1" ~ 5,
+      clarity=="VVS2" ~ 6,
+      clarity=="VVS1" ~ 7,
+      clarity=="IF" ~ 8 
+    )
+  ) 
+my_dat<- tmp %>% select(carat,cut_num,color_num,clarity_num,depth,table,price,x,y,z)
+```
+.
+# now we have a dataset all variables numeric
+
+```{r my_dat}
+glimpse(my_dat)
+```
+
+# 4. Data Visualization
+# 1 Plot Diamond Cut by Numbers to see cut distribution
+# We see 3 major cuttings: Ideal, Premium, Very Good
+
+```{r Plot 1, echo=FALSE}
+theme_set(theme_minimal())
+p1<- dat %>% group_by(cut) %>% summarise(Number=n()) %>% arrange(desc(Number))%>%
+  ggplot(aes(x=reorder(cut, -Number), y=Number)) +
+  geom_col(show.legend = FALSE)+
+  labs(title = "Diamond Cut Numbers") +
+  theme(axis.text.x = element_text(angle = 90,hjust = 1), legend.position = "none") +
+  theme(panel.grid.major.x = element_blank())
+
+p1
+```
+
+
+# 4.2 Question: is the Best Clarity sold at highest price? 
+# From plot below it shows the highest median price is SI2, the average clarity, with many outliers in lower range.  Best clarity(IF, VVS1) median price is not high, but more outliers in upper price range, suggest they are more sold expensively probably due to good quality. The Worst 2 clarity(SI2, I1) has more outliers in lower range, suggest their poor quality could drag down price also.
+
+```{r Plot 2, echo=FALSE}
+p2 <-dat %>% 
+  ggplot(aes(clarity, price)) + 
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90,hjust = 1)) + 
+  scale_y_continuous(trans = "log2") 
+p2
+```
+
+# 4.3 Diamond price distribution, the majority is less than 10K -15K
+```{r Plot 3, echo=FALSE}
+hist(dat$price,freq = TRUE, col="light blue", border="black", main="Diamond Price Histogram", xlab="price", ylab="count")
+```
+
+# 4.4 Let's look into Diamonds price for those less than $950 vs higher than $5323, we find low-end price stay about $600 - 800, high-end is more centered around 5500-10K
+
+```{r Plot 4, fig.width=8, echo=FALSE}
+g1<- dat %>% filter(price<=950) %>%
+   ggplot(aes(x=price)) + 
+   geom_density(fill="#69b3a2", color="pink", alpha=0.8) +
+   labs(title="Price Group $950 or less")
+g1
+g2<- dat %>% filter(price>=5323) %>%
+   ggplot(aes(x=price)) + 
+   geom_density(fill="pink", color="red", alpha=0.8) +
+   labs(title="Price Group $5323 or more") 
+g2
+# install.packages("gridExtra")
+grid.arrange(g1, g2, nrow=1)
+
+```
+
+
+# 4.5 Very expensive diamonds cuts percent
+
+```{r Plot 5 very expensive price, echo=FALSE}
+t <-dat%>% filter(price>=18000) %>% select(cut,color,carat,price)
+
+total<-length(!is.na(t$cut))
+t1<- t%>%group_by(cut)%>%summarise(percent=n()/total * 100)%>% arrange(desc(percent))
+print.data.frame(t1)
+```
+
+# Very expensive diamonds color percent
+
+```{r Plot 6 very expensive color, echo=FALSE}
+total<-length(!is.na(t$color))
+
+t2<- t%>%group_by(color)%>%summarise(percent=n()/total * 100)%>% arrange(desc(percent))
+print.data.frame(t2)
+```
+# It’s an interesting observation that best color D only 5.8%, suggest color is not a main factor to attract more buyers compared with clarity or others.
+
+# Very expensive diamonds carat distribution
+
+```{r very expensive by carat, echo=TRUE}
+total<-length(!is.na(t$carat))
+
+t%>%group_by(carat)%>%summarise(percent=round(n()/total * 100))%>% filter(percent>=1) %>% nrow()
+```
+# 4.6 Plot the distribution of carat, min - max from 1.04 to 4.5, mid range around 2
+
+```{r Plot 7, echo=FALSE, warning=FALSE, message=FALSE}
+p<- t%>%group_by(carat)%>%summarise(
+  percent=round(n()/total * 100)) %>% 
+  ggplot(aes(x=percent, y=carat)) +
+  geom_smooth() + labs(title = "very expensive Diamond carat")
+suppressWarnings(print(p))
+```
+
+# 4.7 Some small diamonds are sold more than $2075. Question: what's their carat? what's their cutting quality, clarity?
+
+```{r, small diamonds, echo=FALSE}
+# there are 6 of small-Diamond sold at high price
+tmp_tbl <-tmp %>% filter(VolGrp=='small' & (price >=2000 & price <=2366)) %>%select(price,carat,cut,color,clarity)
+print(tmp_tbl)
+```
+# Above data shows their carat is around 0.34, cut is normal, but many have Best Color (D) and Best clarity (IF). It suggests buyers 
+# love these diamond’s crystal quality even if they are small, and buyers may not be able to tell the difference between cut grades
+# due to their lack of professional knowledge in cutting techniques.
+
+
+# 4.8 I add a new column VolGrp to get full size, after calculation the data shows cutting point for size small is < 65.19, large is >170.84, those in-between is Medium. 
+
+```{r, 8 VolGrp, echo=TRUE}
+tmp<-dat %>% select(price,x,y,z,carat,cut,color,clarity) %>%
+  mutate(
+  Vol = round(x*y*z, digits = 2),
+  VolGrp = case_when(
+    Vol <65.19 ~ "small",
+    Vol >170.84 ~ "large",
+    TRUE ~ "medium"
+  )
+)
+
+# The over-lap of price in Large, Medium, Small group
+tmp %>% group_by(VolGrp) %>% 
+  summarise(min_price=min(price), max_price=max(price))
+```
+
+# Since we have Diamond VolGrp data, we like to see cut and clarity by group. The following plot shows the 3 types of cuttings Very Good, Premium, Ideal occurs in all groups, however, the Worst type (Fair) percentage at small group is relative much lower than other 2 groups.
+
+```{r, Plot VolGrp cut, echo=FALSE}
+tmp2<-tmp %>% select(VolGrp,cut)%>%group_by(VolGrp,cut)%>%
+  summarise(number=n())
+
+tmp2%>%
+ggplot(aes(fill=cut, x=VolGrp, y=number, )) + 
+  geom_bar(position="dodge", stat="identity") +
+  labs(title = "Diamond Volume vs cut distribution")
+```
+
+The following plot shows all groups have all clarity, with large group percentage for Best clarity(VVS1, IF) is lower than other 2 groups.
+
+```{r Plot VolGrp clarity, echo=FALSE}
+tmp3<-tmp %>% select(VolGrp,clarity)%>%group_by(VolGrp,clarity)%>%
+  summarise(number=n())
+
+tmp3%>%
+  ggplot(aes(fill=clarity, x=VolGrp, y=number)) + 
+  geom_bar(position="stack", stat="identity") +
+  labs(title = "Diamond Volume vs clarity distribution")
+```
+
+# 4.9 Now we like to see Diamonds price expensiveness vs VolGrp, I add another new column Expensive, price > $5350 expensive is 1 (true). The observation tells us all small VolGrp diamonds are not expensive, zero percentage (none sold over $5350); medium size Diamonds only has around 9% expensiveness; large Diamonds is over 80% expensive. The size of a dimond does drive price higher.
+
+```{r, Plot 9 Expensive, echo=TRUE}
+tmp4<-tmp %>% select(VolGrp,price) %>% mutate(
+  Expensive=case_when(
+    price >=5350 ~ 1,
+    price <5350 ~ 0
+  ))
+```
+
+```{r, Plot 10, echo=FALSE}
+tbl <- tmp4 %>% group_by(VolGrp,Expensive) %>% summarise(number=n()) %>% mutate(percent=round((number/sum(number)*100),2))
+
+tbl %>%
+  ggplot(aes(x=VolGrp,fill=Expensive, y=number)) +
+  geom_bar(position="dodge", stat="identity", fill="gray") +
+  geom_text(data = tbl, 
+            aes(label = number), 
+            position = position_dodge(width=0.8), 
+            vjust=-0.2, 
+            fontface = "bold", size=3) +
+  theme(legend.position = 'none') +
+  ggtitle("Expensive Rate by VolumeGroup") +
+  scale_x_discrete(name= "Volume") +
+  scale_y_continuous(name = "price") +
+  geom_label(data = tbl, 
+             aes(x = VolGrp, y = number, label = paste0(percent, "%")),
+             position = position_stack(vjust = 0.2), size=3)
+```
+
+# 5. Data Analysis
+# 5.1  Correlation
+# First check correlations of all numeric variables, find price, carat, x,y,z are strong correlated. Cut, color, clarity does not impact price strongly. There are some correlation between table & depth, cut & color.
+
+```{r, cor, echo=FALSE} 
+cormat <- signif(cor(my_dat), 2)
+ggcorrplot(cormat)
+```
+
+# 4 variables have score more than 0.5 to price, shows they are strong correlated
+```{r, cor 4 var, echo=TRUE}
+my_dat2 <- my_dat %>% select(carat,x,y,z,price)
+
+cor(my_dat2$price, my_dat2$carat)
+cor(my_dat2$price, my_dat2$x)
+cor(my_dat2$price, my_dat2$y)
+cor(my_dat2$price, my_dat2$z)
+```
+# "x", "y", "z" show a higher correlation to price column. "depth", "cut" and "table" show low correlation. We could consider dropping in regression analysis
+
+
+# 5. 2. Test the Models
+# 1. Split into train 0.75 and test set 0.25 of dataset
+```{r, Data analysis 2, echo=TRUE}
+set.seed(123) 
+test_index <- createDataPartition(my_dat2$price, times = 1, p = 0.25, list = FALSE)
+test <- my_dat2[test_index,]
+train <- my_dat2 [-test_index,]
+
+# The RMSE function that will be used 
+RMSE <- function(true_ratings = NULL, predicted_ratings = NULL) {
+  round(sqrt(mean((true_ratings - predicted_ratings)^2)), digits = 4)
+}
+
+mu<- mean(train$price) #3935.8
+
+# Base-line RMSE, 1.127
+rmse_output <- RMSE(log(test$price), log(mu))
+RMSE_table <- tibble(Method = "Base-line RMSE", 
+                      RMSE = rmse_output)
+RMSE_table
+```
+
+# 2. Test models
+
+```{r data analysis test model, echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(123)
+lm_model <- train(price ~ x + y + z + carat, data=train, method="lm")
+glm_model <- train(price ~ x + y + z + carat, data=train, method="glm")
+glm_carat_model <- train(price ~ carat, data=train, method="glm")
+loess_model<- train(price ~ x + y + z + carat, data=train, method="gamLoess")
+```
+
+# glm gives the best in Rsquare, RMSE, MAE
+```{r results, echo=TRUE}
+results <- resamples(list(LM=lm_model, GLM=glm_model, GLM_carat=glm_carat_model, LOESS=loess_model))
+summary(results)
+
+bwplot(results)
+```
+```
+
+# 3. Pick GLM model
+```{r GLM, echo=TRUE}
+set.seed(123) 
+# glm with carat only
+fit_glm_carat <- glm(price ~ carat, data=train)
+pred<-predict(fit_glm_carat, test)
+pred<-abs(pred)
+rmse_output <- RMSE(log(test$price), log(pred))
+
+RMSE_table <- rbind(RMSE_table,
+                    tibble(Method = "Regression model by carat", 
+                            RMSE = rmse_output))
+
+# glm regression model with 4 predictors x, y, z, carat
+set.seed(123) 
+fit_glm_4 <- glm(price ~ x + y + z + carat, data=train)
+pred<-predict(fit_glm_4, test)
+pred <- abs(pred)
+rmse_output <- RMSE(log(test$price), log(pred))
+
+RMSE_table <- rbind(RMSE_table,
+                    tibble(Method = "Regression model by 4 predictors", 
+                            RMSE = rmse_output))
+
+# coefficient
+fit_glm_carat$coefficients
+fit_glm_4$coefficients
+
+RMSE_table
+
+```
+
+
+# Next we like to tune for data partitioning percentage
+```{r, partition, echo=TRUE}
+ps <- seq(from=.10, to=.90, by=.05)
+
+rmse_list <- sapply(ps, function(p){
+  train_index <- createDataPartition(my_dat2$price,
+                                     times=1,
+                                     p=ps,
+                                     list=FALSE)
+  train <- my_dat2[train_index,]
+  test <- my_dat2[-train_index,]
+  fit <- glm(price ~ x+y+z+carat, data = train)
+  test <- test %>% 
+    mutate(pred_price = abs(predict.glm(fit, newdata=test)))
+  RMSE(log(test$price), log(test$pred_price))
+})
+
+# Pick suggested percentage 60%
+min(rmse_list)
+ps[which.min(rmse_list)] #0.6
+plot(ps, rmse_list) # no clear winner
+```
+
+# Go back using p in our data split
+
+```{r, new data split, echo=TRUE}
+set.seed(123) 
+train_index <- createDataPartition(my_dat2$price, times = 1, p = 0.6, list = FALSE)
+train <- my_dat2 [train_index,]
+test <- my_dat2[-train_index,]
+
+fit_glm_carat_final <- glm(price ~ carat, data=train)
+fit_glm_4_final <- glm(price ~ x + y + z + carat, data=train)
+pred_3<-predict(fit_glm_carat_final, test)
+pred_3<-abs(pred_3)
+pred_4<-predict(fit_glm_4_final, test)
+pred_4<-abs(pred_4)
+
+rmse_output_3 <- RMSE(log(test$price), log(pred_3))
+rmse_output_4 <- RMSE(log(test$price), log(pred_4))
+
+
+RMSE_table <- rbind(RMSE_table,
+                    tibble(Method = "Regression model using carat + better partition", 
+                           RMSE = rmse_output_3),
+                    tibble(Method = "Regression model using 4 predictors + better partition", 
+                           RMSE = rmse_output_4))
+
+RMSE_table
+
+# final model formula
+# Y_hat = intercept + b1*x +b2*y +b3*z + b4*carat
+fit_glm_4_final$coefficients
+
+```
+
+
