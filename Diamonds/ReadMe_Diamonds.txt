@@ -1,3 +1,5 @@
+Diamond Price dataset on Kaggle can be found at:  https://www.kaggle.com/shivam2503/diamonds
+
 Here is the cutting number lables:
 
 Cut 
